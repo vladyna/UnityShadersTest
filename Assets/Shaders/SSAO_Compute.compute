@@ -1,0 +1,136 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel SSAO
+#pragma kernel Geometry
+#pragma kernel deptSsao
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> _Results;
+RWTexture2D<float4> Positions;
+RWTexture2D<float4> depthTexture;
+float buffer[48];
+
+Texture2D<float4> _gPosition;
+SamplerState sampler_gPosition;
+
+Texture2D<float4> _gDepth;
+SamplerState sampler_gDepth;
+
+Texture2D<float4> _gNormal;
+SamplerState sampler_gNormal;
+
+Texture2D<float4> _gTex;
+SamplerState sampler_gNoise;
+
+float samples[192];
+
+int kernelSize;
+float radius;
+float bias;
+
+float4 noiseScale;
+float4x4 projection;
+float4x4 viewMatrix; 
+[numthreads(8,8,1)]
+void SSAO (uint3 id : SV_DispatchThreadID)
+{
+
+    float3 fragPos = _gPosition.SampleLevel(sampler_gPosition, id.xy, 0).xyz;
+    float3 normal = _gNormal.SampleLevel(sampler_gNormal, id.xy, 0).rgb;
+    int noisePos = id.x / noiseScale.x + id.y / noiseScale.y;
+    float3 randomVec = float3(buffer[noisePos], buffer[noisePos+1], buffer[noisePos+2]);
+
+    float3 tangent = normalize(randomVec - normal * dot(randomVec, normal));
+    float3 bitangent = cross(normal, tangent);
+    float3x3 TBN = float3x3(tangent, bitangent, normal);
+
+    float occlusion = 0.0;
+
+    for (int i = 0; i < kernelSize * 3; i += 3)
+    {
+        float3 samplePos = float3(samples[i], samples[i + 1], samples[i + 2]);
+        samplePos = mul(TBN, samplePos);
+        samplePos = fragPos + mul(samplePos, radius);
+
+        float4 offset = float4(samplePos, 1.0);
+        offset = mul(projection, offset);
+        offset.xyz /= offset.w;
+        offset.xyz = offset.xyz * 0.5 + 0.5;
+
+        float sampleDepth = _gPosition.SampleLevel(sampler_gPosition, offset.xy, 0).z;
+
+        float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
+
+        occlusion += (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;
+    }
+    occlusion = 1.0 - (occlusion / kernelSize);
+    if (occlusion) {
+
+    }
+    _Results[id.xy] = occlusion;//float4(occlusion, 1.f, 0.f, 0.f);
+  //  float3 fragPos = tex2D(sampler_gPosition, id.xy).xyz;
+
+   // = float4(1.f, 1.f, 0.f, 0.f);
+}
+
+float gAspectRatio;
+float gTanHalfFOV;
+float2 ViewRay;
+float2 TexCoord;
+
+float CalcViewZ(float2 Coords)
+{
+    float Depth = _gDepth.SampleLevel(sampler_gDepth, Coords, 0).x;
+    float ViewZ = projection[3][2] / (2 * Depth - 1 - projection[2][2]);
+    return ViewZ;
+}
+
+[numthreads(8, 8, 1)]
+void deptSsao(uint3 id : SV_DispatchThreadID)
+{
+
+    TexCoord = (_gPosition[id.xy].xy + float2(1.0, 1.0)) / 2.0;
+    ViewRay.x = _gPosition[id.xy].x * gAspectRatio * gTanHalfFOV;
+    ViewRay.y = _gPosition[id.xy].y * gTanHalfFOV;
+
+    float ViewZ = CalcViewZ(TexCoord);
+
+    float ViewX = ViewRay.x * ViewZ;
+    float ViewY = ViewRay.y * ViewZ;
+
+    float3 Pos = float3(ViewX, ViewY, ViewZ);
+
+
+    float occlusion = 0.0;
+
+    for (int i = 0; i < kernelSize * 3; i +=3)
+    {
+        float3 samplePos = Pos + float3(samples[i], samples[i + 1], samples[i + 2]);
+        float4 offset = float4(samplePos.x, samplePos.y, samplePos.z, 1.0);
+        offset = mul(projection, offset);
+        offset.xy /= offset.w;
+        offset.xy = offset.xy * 0.5 + float2(0.5, 0.5);
+
+        float sampleDepth = CalcViewZ(offset.xy);
+
+        if (abs(Pos.z - sampleDepth) < radius) {
+            occlusion += step(sampleDepth, samplePos.z);
+          //  occlusion += samplePos.z;
+        }
+    }
+    occlusion = 1.0 - (occlusion / kernelSize);
+    float powValue = pow(occlusion, 2.0);
+
+    _Results[id.xy] = float4(powValue, powValue, powValue, powValue);//float4(occlusion, 1.f, 0.f, 0.f);
+  //  float3 fragPos = tex2D(sampler_gPosition, id.xy).xyz;
+
+   // = float4(1.f, 1.f, 0.f, 0.f);
+}
+
+[numthreads(8, 8, 1)]
+void Geometry(uint3 id : SV_DispatchThreadID)
+{
+    float4x4 clipSpace = mul(projection, viewMatrix);
+    float4 pos = depthTexture[id.xy];
+    Positions[id.xy] = mul(float4(pos.x, pos.y, pos.z, 1.f), clipSpace);
+}
