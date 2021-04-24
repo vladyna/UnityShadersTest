@@ -13,11 +13,14 @@ public class SSAO_Compute : MonoBehaviour
     private float[] kernelSamples;
     private float[] noiseBuffer;
     public GameObject Geometry;
+    public Light directionalLight;
     private Camera camera;
     // Start is called before the first frame update
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        int kernel = ssaoShader.FindKernel("deptSsao");
+        int deptSsaoKernel = ssaoShader.FindKernel("deptSsao");
+        int BlurKernel = ssaoShader.FindKernel("Blur");
+        int LightingKernel = ssaoShader.FindKernel("Lighting");
         renderTarget = CreateRenderTexture(source);
         RenderTexture pos = CreateRenderTexture(source);
      //   RenderTexture normal = CreateRenderTexture(source);
@@ -26,11 +29,30 @@ public class SSAO_Compute : MonoBehaviour
         SetShadersParameters();
 
         RenderTexture gDepthMap = RenderGeometry(source);
-        ssaoShader.SetTexture(kernel, "_gPosition", pos);
-        ssaoShader.SetTexture(kernel, "_gNormal", gDepthMap);
-        ssaoShader.SetTexture(kernel, "_gDepth", gDepthMap);
-        ssaoShader.SetTexture(kernel, "_Results", renderTarget);
-        ssaoShader.Dispatch(kernel, Screen.width / 8, Screen.height / 8, 1);
+        ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", pos);
+        ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", gDepthMap);
+        ssaoShader.SetTexture(deptSsaoKernel, "_gDepth", gDepthMap);
+        ssaoShader.SetTexture(deptSsaoKernel, "_Results", renderTarget);
+        ssaoShader.Dispatch(deptSsaoKernel, Screen.width / 8, Screen.height / 8, 1);
+        RenderTexture ssao = CreateRenderTexture(renderTarget);
+        ssaoShader.SetTexture(BlurKernel, "_Results", renderTarget);
+        ssaoShader.SetTexture(BlurKernel, "_gPosition", pos);
+        ssaoShader.SetTexture(BlurKernel, "_gSSAO", ssao);
+        ssaoShader.SetTexture(BlurKernel, "Positions", gDepthMap);
+        ssaoShader.Dispatch(BlurKernel, Screen.width / 8, Screen.height / 8, 1);
+        RenderTexture blur = CreateRenderTexture(renderTarget);
+        ssaoShader.SetTexture(LightingKernel, "_Results", renderTarget);
+        ssaoShader.SetTexture(LightingKernel, "_gPosition", pos);
+        ssaoShader.SetTexture(LightingKernel, "_gSSAO", ssao);
+        ssaoShader.SetTexture(LightingKernel, "_gBlur", blur);
+        ssaoShader.SetTexture(LightingKernel, "Positions", pos);
+        ssaoShader.SetTexture(LightingKernel, "depthTexture", gDepthMap);
+        ssaoShader.SetFloat("AmbientIntensity", directionalLight.intensity);
+        var lightMatrix = directionalLight.transform.localToWorldMatrix;
+        Vector4 lightDirection = new Vector4(lightMatrix.m20, lightMatrix.m21, lightMatrix.m23);
+        ssaoShader.SetVector("Direction", lightDirection);
+        ssaoShader.SetVector("Color", directionalLight.color);
+        ssaoShader.Dispatch(LightingKernel, Screen.width / 8, Screen.height / 8, 1);
 
         Graphics.Blit(renderTarget, destination);
     }

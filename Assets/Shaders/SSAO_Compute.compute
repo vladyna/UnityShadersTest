@@ -2,6 +2,8 @@
 #pragma kernel SSAO
 #pragma kernel Geometry
 #pragma kernel deptSsao
+#pragma kernel Blur
+#pragma kernel Lighting
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
@@ -21,6 +23,12 @@ SamplerState sampler_gNormal;
 
 Texture2D<float4> _gTex;
 SamplerState sampler_gNoise;
+
+Texture2D<float4> _gSSAO;
+SamplerState sampler_gSSAO;
+
+Texture2D<float4> _gBlur;
+SamplerState sampler_gBlur;
 
 float samples[192];
 
@@ -119,9 +127,9 @@ void deptSsao(uint3 id : SV_DispatchThreadID)
         }
     }
     occlusion = 1.0 - (occlusion / kernelSize);
-    float powValue = pow(occlusion, 2.0);
+    float powValue = occlusion;// pow(occlusion, 2.0);
 
-    _Results[id.xy] = float4(powValue, powValue, powValue, powValue);//float4(occlusion, 1.f, 0.f, 0.f);
+    _Results[id.xy] = float4(powValue, powValue, powValue, 0.f);//float4(occlusion, 1.f, 0.f, 0.f);
   //  float3 fragPos = tex2D(sampler_gPosition, id.xy).xyz;
 
    // = float4(1.f, 1.f, 0.f, 0.f);
@@ -133,4 +141,100 @@ void Geometry(uint3 id : SV_DispatchThreadID)
     float4x4 clipSpace = mul(projection, viewMatrix);
     float4 pos = depthTexture[id.xy];
     Positions[id.xy] = mul(float4(pos.x, pos.y, pos.z, 1.f), clipSpace);
+}
+
+float Offsets[4] = { -1.5, -0.5, 0.5, 1.5 };
+[numthreads(8, 8, 1)]
+void Blur(uint3 id : SV_DispatchThreadID)
+{
+    TexCoord = (_gSSAO[id.xy].xy + float2(1.0, 1.0)) / 2.0;
+    float3 Color = float3(0.0, 0.0, 0.0);
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float2 tc = TexCoord;
+            float width;
+            float height;
+            uint level;
+            _gPosition.GetDimensions(0, width, height, level);
+            tc.x = TexCoord.x + Offsets[j] / width;
+            tc.y = TexCoord.y + Offsets[i] / height;
+            Color += _gPosition.SampleLevel(sampler_gPosition, tc, 0).xyz;
+        }
+    }
+
+    Color /= 16.0;
+
+    _Results[id.xy] = float4(Color.x, Color.y, Color.z, 1.0);
+}
+
+
+float3 Normal0;
+float3 WorldPos0;
+float2 CalcScreenTexCoord(uint3 id)
+{
+    return Positions[id.xy].xy;
+}
+
+float3 Color;
+float AmbientIntensity;
+float DiffuseIntensity;
+float4 Direction;
+
+
+float4 CalcLightInternal(float3 Normal, uint3 id)
+{
+    float4 AmbientColor = float4(Color, 1.0f) * AmbientIntensity;
+
+
+    AmbientColor *= _gSSAO.SampleLevel(sampler_gSSAO, CalcScreenTexCoord(id), 0).x;
+
+    float DiffuseFactor = dot(Normal, -Direction.xyz);
+
+    float4 DiffuseColor = float4(0, 0, 0, 0);
+    float4 SpecularColor = float4(0, 0, 0, 0);
+
+    //if (DiffuseFactor > 0) {
+    //    DiffuseColor = vec4(Light.Color, 1.0f) * Light.DiffuseIntensity * DiffuseFactor;
+
+    //    vec3 VertexToEye = normalize(gEyeWorldPos - WorldPos0);
+    //    vec3 LightReflect = normalize(reflect(LightDirection, Normal));
+    //    float SpecularFactor = dot(VertexToEye, LightReflect);
+    //    SpecularFactor = pow(SpecularFactor, gSpecularPower);
+    //    if (SpecularFactor > 0) {
+    //        SpecularColor = vec4(Light.Color, 1.0f) *
+    //            gMatSpecularIntensity * SpecularFactor;
+    //    }
+    //}
+
+    return (AmbientColor + DiffuseColor + SpecularColor);
+}
+
+float4 CalcDirectionalLight(float3 Normal, uint3 id)
+{
+    return CalcLightInternal(Normal, id);
+}
+
+
+
+[numthreads(8, 8, 1)]
+void Lighting(uint3 id : SV_DispatchThreadID)
+{
+
+    float4x4 clipSpace = mul(projection, viewMatrix);
+    float4 Position = _gPosition[id.xy];
+    TexCoord = mul(float4(Position.x, Position.y, Position.z, 1.0), clipSpace );
+    Normal0 = (float4(depthTexture[id.xy].x, depthTexture[id.xy].y, depthTexture[id.xy].z, 0.0)).xyz;
+
+    WorldPos0 = (float4(Position.x, Position.y, Position.z, 1.0)).xyz;
+
+    float3 Normal = normalize(Normal0);
+    float4 TotalLight = CalcDirectionalLight(Normal, id);
+
+    //if (gShaderType == SHADER_TYPE_ONLY_AO) {
+    //    FragColor = vec4(texture(gAOMap, CalcScreenTexCoord()).x);
+    //}
+    //else {
+    //}
+    _Results[id.xy] = _gBlur.SampleLevel(sampler_gBlur, TexCoord.xy, 0) * TotalLight;
 }
