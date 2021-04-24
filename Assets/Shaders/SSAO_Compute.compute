@@ -1,6 +1,7 @@
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel SSAO
 #pragma kernel Geometry
+#pragma kernel GeometryBasic
 #pragma kernel deptSsao
 #pragma kernel Blur
 #pragma kernel Lighting
@@ -8,9 +9,14 @@
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
 RWTexture2D<float4> _Results;
+RWTexture2D<float4> gAlbedo;
+RWTexture2D<float4> gNormal;
+RWTexture2D<float4> gPosition;
+
 RWTexture2D<float4> Positions;
 RWTexture2D<float4> depthTexture;
-float buffer[48];
+float noiseBuffer[48];
+
 
 Texture2D<float4> _gPosition;
 SamplerState sampler_gPosition;
@@ -39,16 +45,17 @@ float bias;
 float4 noiseScale;
 float4x4 projection;
 float4x4 viewMatrix; 
+float4x4 model; 
 [numthreads(8,8,1)]
 void SSAO (uint3 id : SV_DispatchThreadID)
 {
 
     float3 fragPos = _gPosition.SampleLevel(sampler_gPosition, id.xy, 0).xyz;
-    float3 normal = _gNormal.SampleLevel(sampler_gNormal, id.xy, 0).rgb;
-    int noisePos = id.x / noiseScale.x + id.y / noiseScale.y;
-    float3 randomVec = float3(buffer[noisePos], buffer[noisePos+1], buffer[noisePos+2]);
+    float3 normal = normalize(_gNormal.SampleLevel(sampler_gNormal, id.xy, 0).xyz);
+    float noisePos = ((id.x / noiseScale.x) + ((id.y / noiseScale.y * 4)) *3);
+    float3 randomVec = normalize(float3(noiseBuffer[noisePos ], noiseBuffer[noisePos + 1], noiseBuffer[noisePos + 2]));
 
-    float3 tangent = normalize(randomVec - normal * dot(randomVec, normal));
+    float3 tangent = normalize(randomVec - mul(normal, dot(randomVec, normal)));
     float3 bitangent = cross(normal, tangent);
     float3x3 TBN = float3x3(tangent, bitangent, normal);
 
@@ -60,7 +67,7 @@ void SSAO (uint3 id : SV_DispatchThreadID)
         samplePos = mul(TBN, samplePos);
         samplePos = fragPos + mul(samplePos, radius);
 
-        float4 offset = float4(samplePos, 1.0);
+        float4 offset = float4(samplePos.x, samplePos.y, samplePos.z, 1.0);
         offset = mul(projection, offset);
         offset.xyz /= offset.w;
         offset.xyz = offset.xyz * 0.5 + 0.5;
@@ -69,13 +76,13 @@ void SSAO (uint3 id : SV_DispatchThreadID)
 
         float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
 
-        occlusion += (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;
+        occlusion +=  (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0)* rangeCheck;
     }
     occlusion = 1.0 - (occlusion / kernelSize);
     if (occlusion) {
 
     }
-    _Results[id.xy] = occlusion;//float4(occlusion, 1.f, 0.f, 0.f);
+    _Results[id.xy] = float4(occlusion, occlusion, occlusion, 0.f);
   //  float3 fragPos = tex2D(sampler_gPosition, id.xy).xyz;
 
    // = float4(1.f, 1.f, 0.f, 0.f);
@@ -129,7 +136,7 @@ void deptSsao(uint3 id : SV_DispatchThreadID)
     occlusion = 1.0 - (occlusion / kernelSize);
     float powValue = occlusion;// pow(occlusion, 2.0);
 
-    _Results[id.xy] = float4(powValue, powValue, powValue, 0.f);//float4(occlusion, 1.f, 0.f, 0.f);
+    _Results[id.xy] = float4(powValue, powValue, powValue, powValue);//float4(occlusion, 1.f, 0.f, 0.f);
   //  float3 fragPos = tex2D(sampler_gPosition, id.xy).xyz;
 
    // = float4(1.f, 1.f, 0.f, 0.f);
@@ -140,14 +147,29 @@ void Geometry(uint3 id : SV_DispatchThreadID)
 {
     float4x4 clipSpace = mul(projection, viewMatrix);
     float4 pos = depthTexture[id.xy];
-    Positions[id.xy] = mul(float4(pos.x, pos.y, pos.z, 1.f), clipSpace);
+    Positions[id.xy] = mul(clipSpace, float4(pos.x, pos.y, pos.z, 1.f));
+}
+
+[numthreads(8, 8, 1)]
+void GeometryBasic(uint3 id : SV_DispatchThreadID)
+{
+    float4 viewPos = mul(mul(viewMatrix, model), float4(depthTexture[id.xy].xyz, 1.f));
+
+    float3 FragPos = viewPos.xyz;
+
+    float3x3 normalMatrix = mul(viewMatrix, model);
+    normalMatrix = transpose(normalMatrix);
+    float3 Normal = mul(normalMatrix, (false ? -depthTexture[id.xy].xyz : depthTexture[id.xy].xyz));
+    gPosition[id.xy] = float4(FragPos, 1.f);
+    gNormal[id.xy] = float4(normalize(Normal), 1.f);
+    gAlbedo[id.xy] = float4(0.95, 0.95, 0.95, 0.f);
 }
 
 float Offsets[4] = { -1.5, -0.5, 0.5, 1.5 };
 [numthreads(8, 8, 1)]
 void Blur(uint3 id : SV_DispatchThreadID)
 {
-    TexCoord = (_gSSAO[id.xy].xy + float2(1.0, 1.0)) / 2.0;
+    TexCoord = (_gPosition[id.xy].xy + float2(1.0, 1.0)) / 2.0;
     float3 Color = float3(0.0, 0.0, 0.0);
 
     for (int i = 0; i < 4; i++) {
@@ -156,10 +178,10 @@ void Blur(uint3 id : SV_DispatchThreadID)
             float width;
             float height;
             uint level;
-            _gPosition.GetDimensions(0, width, height, level);
+            _gSSAO.GetDimensions(0, width, height, level);
             tc.x = TexCoord.x + Offsets[j] / width;
             tc.y = TexCoord.y + Offsets[i] / height;
-            Color += _gPosition.SampleLevel(sampler_gPosition, tc, 0).xyz;
+            Color += _gSSAO.SampleLevel(sampler_gSSAO, tc, 0).xyz;
         }
     }
 
@@ -180,41 +202,42 @@ float3 Color;
 float AmbientIntensity;
 float DiffuseIntensity;
 float4 Direction;
+float3 lightPosition;
 
+float lightLinear = 0.09;
+float lightQuadratic = 0.032;
+
+float gSpecularPower;
+float gMatSpecularIntensity;
+float3 gEyeWorldPos;
 
 float4 CalcLightInternal(float3 Normal, uint3 id)
 {
     float4 AmbientColor = float4(Color, 1.0f) * AmbientIntensity;
 
 
-    AmbientColor *= _gSSAO.SampleLevel(sampler_gSSAO, CalcScreenTexCoord(id), 0).x;
+    AmbientColor *= _gBlur.SampleLevel(sampler_gBlur, id.xy, 0).x;
 
     float DiffuseFactor = dot(Normal, -Direction.xyz);
 
     float4 DiffuseColor = float4(0, 0, 0, 0);
     float4 SpecularColor = float4(0, 0, 0, 0);
 
-    //if (DiffuseFactor > 0) {
-    //    DiffuseColor = vec4(Light.Color, 1.0f) * Light.DiffuseIntensity * DiffuseFactor;
+    if (DiffuseFactor > 0) {
+        DiffuseColor = float4(Color, 1.0f) * DiffuseIntensity * DiffuseFactor;
 
-    //    vec3 VertexToEye = normalize(gEyeWorldPos - WorldPos0);
-    //    vec3 LightReflect = normalize(reflect(LightDirection, Normal));
-    //    float SpecularFactor = dot(VertexToEye, LightReflect);
-    //    SpecularFactor = pow(SpecularFactor, gSpecularPower);
-    //    if (SpecularFactor > 0) {
-    //        SpecularColor = vec4(Light.Color, 1.0f) *
-    //            gMatSpecularIntensity * SpecularFactor;
-    //    }
-    //}
+        //float3 VertexToEye = normalize(gEyeWorldPos - WorldPos0);
+        //float3 LightReflect = normalize(reflect(LightDirection, Normal));
+        //float SpecularFactor = dot(VertexToEye, LightReflect);
+        //SpecularFactor = pow(SpecularFactor, gSpecularPower);
+        //if (SpecularFactor > 0) {
+        //    SpecularColor = float3(Light.Color, 1.0f) *
+        //        gMatSpecularIntensity * SpecularFactor;
+        //}
+    }
 
     return (AmbientColor + DiffuseColor + SpecularColor);
 }
-
-float4 CalcDirectionalLight(float3 Normal, uint3 id)
-{
-    return CalcLightInternal(Normal, id);
-}
-
 
 
 [numthreads(8, 8, 1)]
@@ -222,19 +245,43 @@ void Lighting(uint3 id : SV_DispatchThreadID)
 {
 
     float4x4 clipSpace = mul(projection, viewMatrix);
-    float4 Position = _gPosition[id.xy];
-    TexCoord = mul(float4(Position.x, Position.y, Position.z, 1.0), clipSpace );
+    float3 FragPos = _gPosition[id.xy].xyz;
+    //TexCoord = mul(float4(Position.x, Position.y, Position.z, 1.0), clipSpace );
     Normal0 = (float4(depthTexture[id.xy].x, depthTexture[id.xy].y, depthTexture[id.xy].z, 0.0)).xyz;
+    WorldPos0 = (float4(FragPos.x, FragPos.y, FragPos.z, 1.0)).xyz;
 
-    WorldPos0 = (float4(Position.x, Position.y, Position.z, 1.0)).xyz;
+    float AmbientOcclusion = _gBlur.SampleLevel(sampler_gBlur, FragPos.xy, 0).x;
 
-    float3 Normal = normalize(Normal0);
-    float4 TotalLight = CalcDirectionalLight(Normal, id);
+    float3 ambient = float3(0.3 * FragPos * AmbientOcclusion);
+    float3 lighting = ambient;
+    float3 viewDir = normalize(-FragPos);
+
+    float3 Normal = _gDepth.SampleLevel(sampler_gDepth, FragPos.xy, 0);
+
+    // diffuse
+    float3 lightDir = Direction.xyz;//normalize(lightPosition - FragPos.xyz);
+    float3 diffuse = max(dot(Normal, lightDir), 0.0) * FragPos * Color;
+    // specular
+    float3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(Normal, halfwayDir), 0.0), 8.0);
+    float3 specular = Color * spec;
+
+    float distance = length(lightPosition - FragPos);
+    float attenuation = 1.0 / (1.0 + lightLinear * distance + lightQuadratic * distance * distance);
+
+    diffuse *= attenuation;
+    specular *= attenuation;
+    lighting += diffuse + specular;
+
+    //float3 Normal = normalize(Normal0);
+    //float4 TotalLight = CalcLightInternal(Normal, id);
 
     //if (gShaderType == SHADER_TYPE_ONLY_AO) {
     //    FragColor = vec4(texture(gAOMap, CalcScreenTexCoord()).x);
     //}
     //else {
     //}
-    _Results[id.xy] = _gBlur.SampleLevel(sampler_gBlur, TexCoord.xy, 0) * TotalLight;
+
+    //_Results[id.xy] = _gPosition.SampleLevel(sampler_gPosition, id.xy, 0) * TotalLight;
+    _Results[id.xy] = float4(lighting.x, lighting.y, lighting.z, 1.f);
 }
