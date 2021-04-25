@@ -22,13 +22,22 @@ public class SSAO_Compute : MonoBehaviour
     private RenderTexture renderTarget;
     private RenderTexture position;
     private RenderTexture normal;
+    private RenderTexture depth;
     private RenderTexture ssao;
     private RenderTexture blur;
     private float[] kernelSamples;
     private float[] noiseBuffer;
+    private Color32[] Noises;
     private Camera camera;
+    private Material mat;
     private bool isDepth = false;
     // Start is called before the first frame update
+
+    private void OnPreRender()
+    {
+        Shader.SetGlobalMatrix(Shader.PropertyToID("UNITY_MATRIX_IV"), camera.cameraToWorldMatrix.inverse);
+
+    }
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
         int deptSsaoKernel = isDepth ? ssaoShader.FindKernel("deptSsao") : ssaoShader.FindKernel("SSAO");
@@ -36,30 +45,42 @@ public class SSAO_Compute : MonoBehaviour
         int LightingKernel = ssaoShader.FindKernel("Lighting");
         renderTarget = CreateRenderTexture(source);
         position = CreateRenderTexture(source);
-
+        normal = CreateRenderTexture(source);
+        depth = CreateRenderTexture(source);
         SetShadersParameters();
 
-        normal = isDepth ? RenderGeometry(source) : RenderGeometryBasic(source);
+        Texture2D noiseTexture = new Texture2D(4, 4);
+        noiseTexture.wrapMode = TextureWrapMode.Repeat;
+        noiseTexture.wrapModeU = TextureWrapMode.Repeat;
+        noiseTexture.wrapModeV = TextureWrapMode.Repeat;
+        noiseTexture.SetPixelData(noiseBuffer, 0);
+        noiseTexture.Apply();
+        RenderTexture noiseRender = new RenderTexture(4, 4, 0);
+        noiseRender.wrapModeU = TextureWrapMode.Repeat;
+        noiseRender.wrapModeV = TextureWrapMode.Repeat;
+        noiseRender.wrapMode = TextureWrapMode.Repeat;
+        noiseRender.enableRandomWrite = true;
+        Graphics.Blit(noiseTexture, noiseRender);
+        //Graphics.Blit(normal, destination);
+        Graphics.Blit(source, normal, mat);
         if (isDepth)
         {
-            ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", position);
-            ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", normal);
-            ssaoShader.SetTexture(deptSsaoKernel, "_gDepth", normal);
-            ssaoShader.SetTexture(deptSsaoKernel, "_Results", renderTarget);
-            ssaoShader.Dispatch(deptSsaoKernel, Screen.width / 8, Screen.height / 8, 1);
-            ssao = CreateRenderTexture(renderTarget);
+
         }
         else
         {
           //  var tex = new RenderTexture();
     
             ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", position);
-            ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", normalBasic);
+            ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", normal);
+            ssaoShader.SetTexture(deptSsaoKernel, "_noiseTexture", noiseRender);
             ssaoShader.SetTexture(deptSsaoKernel, "_Results", renderTarget);
-            ssaoShader.Dispatch(deptSsaoKernel, Screen.width / 8, Screen.height / 8, 1);
-            ssao = CreateRenderTexture(renderTarget);
+
+            ssaoShader.GetKernelThreadGroupSizes(deptSsaoKernel, out uint groupX, out uint groupY, out uint groupZ);
+            ssaoShader.Dispatch(deptSsaoKernel, Screen.width / (int)groupX, Screen.height / (int)groupY, (int)groupZ);
+           // ssao = CreateRenderTexture(renderTarget);
         }
-        ssaoShader.SetTexture(BlurKernel, "_Results", renderTarget);
+/*        ssaoShader.SetTexture(BlurKernel, "_Results", renderTarget);
         ssaoShader.SetTexture(BlurKernel, "_gPosition", position);
         ssaoShader.SetTexture(BlurKernel, "_gDepth", normal);
         ssaoShader.SetTexture(BlurKernel, "_gSSAO", ssao);
@@ -80,11 +101,21 @@ public class SSAO_Compute : MonoBehaviour
         Vector3 lightPosition = directionalLight.transform.position;
         ssaoShader.SetVector("Direction", lightDirection);
         ssaoShader.SetVector("Color", directionalLight.color);
-        ssaoShader.SetVector("lightPosition", lightPosition);
+        ssaoShader.SetVector("lightPosition", lightPosition);*/
         //ssaoShader.Dispatch(LightingKernel, Screen.width / 8, Screen.height / 8, 1);
+
 
         Graphics.Blit(renderTarget, destination);
         ReleaseRenderTargets();
+    }
+
+    private void ShowArray<T>(T[] array)
+    {
+        for (var i = 0; i < array.Length; i ++)
+        {
+            Debug.Log($"{array[i]}");
+        }
+
     }
 
     private void SetShadersParameters()
@@ -100,93 +131,35 @@ public class SSAO_Compute : MonoBehaviour
 
         ssaoShader.SetFloats("noiseBuffer", noiseBuffer);
         ssaoShader.SetMatrix("viewMatrix", camera.cameraToWorldMatrix);
-        ssaoShader.SetVector("noiseScale", new Vector4(Screen.width / 3, Screen.height / 3, 0, 0));
+        ssaoShader.SetVector("noiseScale", new Vector4(Screen.width / 4, Screen.height / 4, 0, 0));
     }
 
     private void ReleaseRenderTargets()
     {
         renderTarget.Release();
-        position.Release();
-        normal.Release();
-        ssao.Release();
-        blur.Release();
-    }
-
-    private RenderTexture RenderGeometryBasic(RenderTexture source)
-    {
-        int kernel = ssaoShader.FindKernel("GeometryBasic");
-        // pass model matrix
-        // pass camera info
-
-        // receive the glposition, Normal and albedo
-        RenderTexture meshTexture = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        RenderTexture gDepthMap = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        normalBasic = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        albedoBasic = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        positionBasic = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        gDepthMap.enableRandomWrite = true;
-        normalBasic.enableRandomWrite = true;
-        albedoBasic.enableRandomWrite = true;
-        positionBasic.enableRandomWrite = true;
-        meshTexture.enableRandomWrite = true;
-        var normalTexture = Geometry.GetComponentInChildren<Renderer>().materials[0].GetTexture("_BumpMap");
-        // var mesh = Geometry.GetComponentInChildren<Renderer>().materials[0].GetTexture("_BumpMap");
-        Graphics.SetRenderTarget(meshTexture);
-        var meshes = Geometry.GetComponentsInChildren<MeshFilter>();
-        for (int i = 0; i < meshes.Length; i++)
-        {
-            var mesh = meshes[i].sharedMesh;
-            Graphics.DrawMeshNow(mesh, meshes[i].transform.localToWorldMatrix);
-        }
-        Graphics.SetRenderTarget(null);
-        ssaoShader.SetTexture(kernel, "gPosition", positionBasic);
-        ssaoShader.SetMatrix("model", model.transform.localToWorldMatrix);
-        ssaoShader.SetTexture(kernel, "gNormal", normalBasic);
-        ssaoShader.SetTexture(kernel, "gAlbedo", albedoBasic);
-        ssaoShader.SetTexture(kernel, "depthTexture", meshTexture);
-        ssaoShader.Dispatch(kernel, Screen.width / 8, Screen.height / 8, 1);
-        return meshTexture;
-
-    }
-
-    private RenderTexture RenderGeometry(RenderTexture source)
-    {
-        int kernel = ssaoShader.FindKernel("Geometry");
-        // pass model matrix
-        // pass camera info
-
-        // receive the glposition, Normal and albedo
-        RenderTexture meshTexture = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        RenderTexture gDepthMap = new RenderTexture(source.width, source.height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-        gDepthMap.enableRandomWrite = true;
-        meshTexture.enableRandomWrite = true;
-        var normalTexture = Geometry.GetComponentInChildren<Renderer>().materials[0].GetTexture("_BumpMap");
-       // var mesh = Geometry.GetComponentInChildren<Renderer>().materials[0].GetTexture("_BumpMap");
-        Graphics.SetRenderTarget(meshTexture);
-        var meshes = Geometry.GetComponentsInChildren<MeshFilter>();
-        for (int i = 0; i < meshes.Length; i++)
-        {
-            var mesh = meshes[i].sharedMesh;
-            Graphics.DrawMeshNow(mesh, meshes[i].transform.localToWorldMatrix);
-        }
-        Graphics.SetRenderTarget(null);
-        ssaoShader.SetTexture(kernel, "Positions", gDepthMap);
-        ssaoShader.SetTexture(kernel, "depthTexture", meshTexture);
-        ssaoShader.Dispatch(kernel, Screen.width / 8, Screen.height / 8, 1);
-        return gDepthMap;
-
+       // position.Release();
+       // normal.Release();
+       // ssao.Release();
+        //blur.Release();
     }
 
     private void Awake()
     {
-        camera = GetComponent<Camera>();
+   
         noiseBuffer = noise();
         kernelSamples = getKernels();
+        Noises = Noise();
+        ShowArray(kernelSamples);
+       // ShowArray(kernelSamples);
+
+
     }
 
     void Start()
     {
-        
+        camera = GetComponent<Camera>();
+        camera.depthTextureMode = DepthTextureMode.DepthNormals;
+        mat = new Material(Shader.Find("Hidden/SceenDepthNormal"));
     }
 
     // Update is called once per frame
@@ -206,23 +179,23 @@ public class SSAO_Compute : MonoBehaviour
 
     private float[] getKernels()
     {
-        float[] kernelBuffer = new float[8 * 8 * 3];
+        float[] kernelBuffer = new float[kernelSize * 3];
         
-        for (int i = 0; i < 64; i++)
+        for (int i = 0; i < kernelSize; i++)
         {
             Vector3 sample = new Vector3(
                     (GetRandomFloat() * 2.0f - 1.0f), 
                     (GetRandomFloat() * 2.0f - 1.0f),
-                    (GetRandomFloat()));
+                    GetRandomFloat());
             sample.Normalize();
-            sample = sample * GetRandomFloat();
-            float scale = (float)i / 64.0f;
+            sample *= GetRandomFloat();
+            float scale = (float)i / kernelSize;
             scale = Mathf.Lerp(0.1f, 1.0f, scale * scale);
-            sample = sample * scale;
-            int position = i * 3;
-            kernelBuffer.SetValue(sample.x, position);
-            kernelBuffer.SetValue(sample.y, position + 1);
-            kernelBuffer.SetValue(sample.z, position + 2);
+            sample *= scale;
+            var pos = i * 3;
+            kernelBuffer.SetValue(sample.x, pos);
+            kernelBuffer.SetValue(sample.y, pos + 1);
+            kernelBuffer.SetValue(sample.z, pos + 2);
         }
         return kernelBuffer;
     }
@@ -244,8 +217,24 @@ public class SSAO_Compute : MonoBehaviour
         return noiseBuffer;
     }
 
+    private Color32[] Noise()
+    {
+        Color32[] noiseBuffer = new Color32[16];
+        for (int i = 0; i < 16; i++)
+        {
+            Color32 sample = new Color32(
+                (byte)Random.Range(1, 256),
+                (byte)Random.Range(1, 256),
+                0,
+                0);
+            noiseBuffer.SetValue(sample, i);
+
+        }
+        return noiseBuffer;
+    }
+
     private float GetRandomFloat()
     {
-        return Random.Range(0.0f, 1.0f);
+        return Random.Range(0.1f, 1.0f);
     }
 }
