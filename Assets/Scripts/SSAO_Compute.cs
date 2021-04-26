@@ -4,34 +4,41 @@ using UnityEngine;
 
 public class SSAO_Compute : MonoBehaviour
 {
+    #region Public Variables
+
     public ComputeShader ssaoShader;
     public float Radius = 1.0f;
     public float Bias = 0.002f;
-    public int kernelSize = 64;
-    public float Diffuse = 1;
-    public GameObject Geometry;
-    public Light directionalLight;
 
+    #endregion
 
-    private RenderTexture positionBasic;
-    private RenderTexture normalBasic;
-    private RenderTexture albedoBasic;
-    public GameObject model;
-
+    #region Private variables
 
     private RenderTexture renderTarget;
     private RenderTexture position;
     private RenderTexture normal;
-    private RenderTexture depth;
     private RenderTexture ssao;
-    private RenderTexture blur;
+    private int kernelSize = 64;
     private float[] kernelSamples;
     private float[] noiseBuffer;
-    private Color32[] Noises;
     private Camera camera;
     private Material mat;
-    private bool isDepth = false;
-    // Start is called before the first frame update
+
+    #endregion
+
+
+    private void Awake()
+    {
+        noiseBuffer = noise();
+        kernelSamples = getKernels();
+    }
+
+    void Start()
+    {
+        camera = GetComponent<Camera>();
+        camera.depthTextureMode = DepthTextureMode.DepthNormals;
+        mat = new Material(Shader.Find("Hidden/SceenDepthNormal"));
+    }
 
     private void OnPreRender()
     {
@@ -40,15 +47,47 @@ public class SSAO_Compute : MonoBehaviour
     }
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        int deptSsaoKernel = isDepth ? ssaoShader.FindKernel("deptSsao") : ssaoShader.FindKernel("SSAO");
-        int BlurKernel = ssaoShader.FindKernel("Blur");
-        int LightingKernel = ssaoShader.FindKernel("Lighting");
+        int deptSsaoKernel = ssaoShader.FindKernel("SSAO");
         renderTarget = CreateRenderTexture(source);
+
+        //TODO(): Find way to get pure position texture before light pass
         position = CreateRenderTexture(source);
         normal = CreateRenderTexture(source);
-        depth = CreateRenderTexture(source);
+        ssao = CreateRenderTexture(source);
         SetShadersParameters();
 
+        RenderTexture noiseRender = CreateNoiseTextureFromArray(noiseBuffer);
+
+        // Gets normal and depth from camera
+        // TODO(): Find a better way to extract normal and depth from camera
+        Graphics.Blit(source, normal, mat);
+    
+        ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", position);
+        ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", normal);
+        ssaoShader.SetTexture(deptSsaoKernel, "_noiseTexture", noiseRender);
+        ssaoShader.SetTexture(deptSsaoKernel, "_Results", renderTarget);
+
+        ssaoShader.GetKernelThreadGroupSizes(deptSsaoKernel, out uint groupX, out uint groupY, out uint groupZ);
+        ssaoShader.Dispatch(deptSsaoKernel, Screen.width / (int)groupX, Screen.height / (int)groupY, (int)groupZ);
+
+        Graphics.Blit(renderTarget, ssao);
+
+        //TODO(): Pass SSAO further
+        Graphics.Blit(renderTarget, destination);
+        ReleaseRenderTargets();
+    }
+
+    private void ShowArray<T>(T[] array)
+    {
+        for (var i = 0; i < array.Length; i ++)
+        {
+            Debug.Log($"{array[i]}");
+        }
+
+    }
+
+    private RenderTexture CreateNoiseTextureFromArray(float[] noiseBuffer)
+    {
         Texture2D noiseTexture = new Texture2D(4, 4);
         noiseTexture.wrapMode = TextureWrapMode.Repeat;
         noiseTexture.wrapModeU = TextureWrapMode.Repeat;
@@ -61,61 +100,7 @@ public class SSAO_Compute : MonoBehaviour
         noiseRender.wrapMode = TextureWrapMode.Repeat;
         noiseRender.enableRandomWrite = true;
         Graphics.Blit(noiseTexture, noiseRender);
-        //Graphics.Blit(normal, destination);
-        Graphics.Blit(source, normal, mat);
-        if (isDepth)
-        {
-
-        }
-        else
-        {
-          //  var tex = new RenderTexture();
-    
-            ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", position);
-            ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", normal);
-            ssaoShader.SetTexture(deptSsaoKernel, "_noiseTexture", noiseRender);
-            ssaoShader.SetTexture(deptSsaoKernel, "_Results", renderTarget);
-
-            ssaoShader.GetKernelThreadGroupSizes(deptSsaoKernel, out uint groupX, out uint groupY, out uint groupZ);
-            ssaoShader.Dispatch(deptSsaoKernel, Screen.width / (int)groupX, Screen.height / (int)groupY, (int)groupZ);
-           // ssao = CreateRenderTexture(renderTarget);
-        }
-/*        ssaoShader.SetTexture(BlurKernel, "_Results", renderTarget);
-        ssaoShader.SetTexture(BlurKernel, "_gPosition", position);
-        ssaoShader.SetTexture(BlurKernel, "_gDepth", normal);
-        ssaoShader.SetTexture(BlurKernel, "_gSSAO", ssao);
-        ssaoShader.SetTexture(BlurKernel, "Positions", normal);
-      //  ssaoShader.Dispatch(BlurKernel, Screen.width / 8, Screen.height / 8, 1);
-        blur = CreateRenderTexture(renderTarget);
-        ssaoShader.SetTexture(LightingKernel, "_Results", renderTarget);
-        ssaoShader.SetTexture(LightingKernel, "_gPosition", position);
-        ssaoShader.SetTexture(LightingKernel, "_gSSAO", ssao);
-        ssaoShader.SetTexture(LightingKernel, "_gBlur", blur);
-        ssaoShader.SetTexture(LightingKernel, "Positions", position);
-        ssaoShader.SetTexture(LightingKernel, "depthTexture", normal);
-        ssaoShader.SetTexture(LightingKernel, "_gDepth", normal);
-        ssaoShader.SetFloat("AmbientIntensity", directionalLight.intensity);
-        ssaoShader.SetFloat("DiffuseIntensity", Diffuse);
-        var lightMatrix = directionalLight.transform.localToWorldMatrix;
-        Vector4 lightDirection = new Vector4(lightMatrix.m20, lightMatrix.m21, lightMatrix.m23);
-        Vector3 lightPosition = directionalLight.transform.position;
-        ssaoShader.SetVector("Direction", lightDirection);
-        ssaoShader.SetVector("Color", directionalLight.color);
-        ssaoShader.SetVector("lightPosition", lightPosition);*/
-        //ssaoShader.Dispatch(LightingKernel, Screen.width / 8, Screen.height / 8, 1);
-
-
-        Graphics.Blit(renderTarget, destination);
-        ReleaseRenderTargets();
-    }
-
-    private void ShowArray<T>(T[] array)
-    {
-        for (var i = 0; i < array.Length; i ++)
-        {
-            Debug.Log($"{array[i]}");
-        }
-
+        return noiseRender;
     }
 
     private void SetShadersParameters()
@@ -137,35 +122,9 @@ public class SSAO_Compute : MonoBehaviour
     private void ReleaseRenderTargets()
     {
         renderTarget.Release();
-       // position.Release();
-       // normal.Release();
-       // ssao.Release();
-        //blur.Release();
-    }
-
-    private void Awake()
-    {
-   
-        noiseBuffer = noise();
-        kernelSamples = getKernels();
-        Noises = Noise();
-        ShowArray(kernelSamples);
-       // ShowArray(kernelSamples);
-
-
-    }
-
-    void Start()
-    {
-        camera = GetComponent<Camera>();
-        camera.depthTextureMode = DepthTextureMode.DepthNormals;
-        mat = new Material(Shader.Find("Hidden/SceenDepthNormal"));
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-        
+        ssao.Release();
+        normal.Release();
+        position.Release();
     }
 
     private RenderTexture CreateRenderTexture(RenderTexture source)
@@ -177,6 +136,7 @@ public class SSAO_Compute : MonoBehaviour
         return renderTexture;
     }
 
+    // ToDO(): Ability to dynamically  change kernels
     private float[] getKernels()
     {
         float[] kernelBuffer = new float[kernelSize * 3];
@@ -213,22 +173,6 @@ public class SSAO_Compute : MonoBehaviour
             noiseBuffer.SetValue(sample.x, position);
             noiseBuffer.SetValue(sample.y, position + 1);
             noiseBuffer.SetValue(sample.z, position + 2);
-        }
-        return noiseBuffer;
-    }
-
-    private Color32[] Noise()
-    {
-        Color32[] noiseBuffer = new Color32[16];
-        for (int i = 0; i < 16; i++)
-        {
-            Color32 sample = new Color32(
-                (byte)Random.Range(1, 256),
-                (byte)Random.Range(1, 256),
-                0,
-                0);
-            noiseBuffer.SetValue(sample, i);
-
         }
         return noiseBuffer;
     }
