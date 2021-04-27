@@ -5,7 +5,7 @@
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
-RWTexture2D<float4> _Results;
+RWTexture2D<float> _Results;
 
 Texture2D<float4> _gPosition;
 SamplerState sampler_gPosition;
@@ -16,6 +16,8 @@ SamplerState sampler_noiseTexture;
 Texture2D _gNormal;
 SamplerState sampler_gNormal;
 
+Texture2D _gDiffuse;
+SamplerState sampler_gDiffuse;
 
 float noiseBuffer[48];
 float samples[192];
@@ -23,7 +25,7 @@ float samples[192];
 int kernelSize;
 float radius;
 float bias;
-
+float intensity;
 float4 noiseScale;
 float4x4 projection;
 float4x4 viewMatrix; 
@@ -35,10 +37,9 @@ void SSAO (uint3 id : SV_DispatchThreadID)
 {
     float4 NormalDepth = float4(0, 0, 0, 0);
 
-    float2 TexCoord = _gPosition[id.xy];// (id.x, id.y);// + float2(1.0, 1.0)) / 2.0;
+    float2 TexCoord = _gPosition[id.xy];
     DecodeDepthNormal(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0), NormalDepth.w, NormalDepth.xyz);
     float3 fragPos = _gPosition.SampleLevel(sampler_gPosition, TexCoord, 0).xyz;
-   // float3 normal = normalize(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0).xyz);
     float3 normal = normalize(NormalDepth.xyz);//normalize(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0).xyz);
     //float noisePos = ((id.x / noiseScale.x) + ((id.y / noiseScale.y * 3)) *3);
     //float3 randomVec = normalize(float3(noiseBuffer[noisePos ], noiseBuffer[noisePos + 1], noiseBuffer[noisePos + 2]));
@@ -67,9 +68,9 @@ void SSAO (uint3 id : SV_DispatchThreadID)
         occlusion += (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0)* rangeCheck;
 
     }
-    occlusion = 1.0 - (occlusion / kernelSize);
+    occlusion = 1.0 - (occlusion / kernelSize) * intensity;
     //_Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
-    _Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
+    _Results[id.xy] = occlusion;//_gDiffuse.SampleLevel(sampler_gDiffuse, TexCoord, 0).xyz * occlusion;// float4(occlusion, occlusion, occlusion, occlusion);
     //_Results[id.xy] = tex2D(_GlowMap, id.xy);
 
 }
