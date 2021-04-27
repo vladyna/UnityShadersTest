@@ -33,9 +33,13 @@ float gAspectRatio;
 [numthreads(8,1,1)]
 void SSAO (uint3 id : SV_DispatchThreadID)
 {
+    float4 NormalDepth = float4(0, 0, 0, 0);
+
     float2 TexCoord = _gPosition[id.xy];// (id.x, id.y);// + float2(1.0, 1.0)) / 2.0;
+    DecodeDepthNormal(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0), NormalDepth.w, NormalDepth.xyz);
     float3 fragPos = _gPosition.SampleLevel(sampler_gPosition, TexCoord, 0).xyz;
-    float3 normal = normalize(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0).xyz);
+   // float3 normal = normalize(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0).xyz);
+    float3 normal = normalize(NormalDepth.xyz);//normalize(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0).xyz);
     //float noisePos = ((id.x / noiseScale.x) + ((id.y / noiseScale.y * 3)) *3);
     //float3 randomVec = normalize(float3(noiseBuffer[noisePos ], noiseBuffer[noisePos + 1], noiseBuffer[noisePos + 2]));
     float3 randomVec = normalize(_noiseTexture.SampleLevel(sampler_noiseTexture, TexCoord * noiseScale, 0).xyz);
@@ -56,7 +60,7 @@ void SSAO (uint3 id : SV_DispatchThreadID)
         offset.xyz /= offset.w;
         offset.xyz = offset.xyz * 0.5 + 0.5;
 
-        float sampleDepth = _gPosition.SampleLevel(sampler_gPosition, offset.xy, 0).z;
+        float sampleDepth = NormalDepth.w;//_gPosition.SampleLevel(sampler_gPosition, offset.xy, 0).z;
 
         float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
 
@@ -64,7 +68,9 @@ void SSAO (uint3 id : SV_DispatchThreadID)
 
     }
     occlusion = 1.0 - (occlusion / kernelSize);
+    //_Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
     _Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
+    //_Results[id.xy] = tex2D(_GlowMap, id.xy);
 
 }
 

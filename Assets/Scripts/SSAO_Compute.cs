@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class SSAO_Compute : MonoBehaviour
 {
@@ -23,28 +24,48 @@ public class SSAO_Compute : MonoBehaviour
     private float[] noiseBuffer;
     private Camera camera;
     private Material mat;
-
+    private Material normalTexture;
+    private CommandBuffer normalCommandBuffer;
+    private CommandBuffer prelightcommanBuffer;
     #endregion
+
 
 
     private void Awake()
     {
         noiseBuffer = noise();
         kernelSamples = getKernels();
+        camera = GetComponent<Camera>();
+        camera.depthTextureMode = DepthTextureMode.DepthNormals;
+
+    }
+
+    void OnEnable()
+    {
+        normalCommandBuffer = CreateCommandBuffer("NormalDepth", "_gDepthNormals", BuiltinRenderTextureType.DepthNormals);
+
+        prelightcommanBuffer = CreateCommandBuffer("prelight", "_gPrelight", BuiltinRenderTextureType.Depth);
+
+        camera.AddCommandBuffer(CameraEvent.AfterDepthNormalsTexture, normalCommandBuffer);
+        camera.AddCommandBuffer(CameraEvent.AfterDepthTexture, prelightcommanBuffer);
+    }
+
+    void OnDisable()
+    {
+        Camera.main.RemoveCommandBuffer(CameraEvent.AfterDepthTexture, normalCommandBuffer);
     }
 
     void Start()
     {
-        camera = GetComponent<Camera>();
-        camera.depthTextureMode = DepthTextureMode.DepthNormals;
+
         mat = new Material(Shader.Find("Hidden/SceenDepthNormal"));
     }
 
     private void OnPreRender()
     {
         Shader.SetGlobalMatrix(Shader.PropertyToID("UNITY_MATRIX_IV"), camera.cameraToWorldMatrix.inverse);
-
     }
+
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
         int deptSsaoKernel = ssaoShader.FindKernel("SSAO");
@@ -54,27 +75,64 @@ public class SSAO_Compute : MonoBehaviour
         position = CreateRenderTexture(source);
         normal = CreateRenderTexture(source);
         ssao = CreateRenderTexture(source);
+       // var globaltexture = CreateRenderTexture(source);
+      //  globaltexture.SetGlobalShaderProperty("_glowMap");
         SetShadersParameters();
 
         RenderTexture noiseRender = CreateNoiseTextureFromArray(noiseBuffer);
 
         // Gets normal and depth from camera
         // TODO(): Find a better way to extract normal and depth from camera
-        Graphics.Blit(source, normal, mat);
-    
-        ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", position);
-        ssaoShader.SetTexture(deptSsaoKernel, "_gNormal", normal);
+/*        cmdBuffer = new CommandBuffer();
+        cmdBuffer.name = "cmdBuffer";
+        int TempID = Shader.PropertyToID("_Temp1");
+        cmdBuffer.GetTemporaryRT(TempID, -1, -1, 24, FilterMode.Bilinear);
+        cmdBuffer.SetRenderTarget(TempID);
+        cmdBuffer.ClearRenderTarget(true, true, Color.black);
+        cmdBuffer.SetGlobalTexture("_GlowMap", TempID);
+        cmdBuffer.Blit(BuiltinRenderTextureType.DepthNormals, BuiltinRenderTextureType.PropertyName, normalTexture);
+        camera.AddCommandBuffer(CameraEvent.AfterDepthNormalsTexture, cmdBuffer);*/
+   
+
+        /*        CommandBuffer commandbuffer = new CommandBuffer();
+                commandbuffer.Blit(BuiltinRenderTextureType.DepthNormals, BuiltinRenderTextureType.CameraTarget);
+                camera.AddCommandBuffer(CameraEvent.AfterDepthNormalsTexture, commandbuffer);*/
+        // Graphics.Blit(camera.targetTexture, normal);
+        // camera.RemoveCommandBuffer(CameraEvent.AfterDepthNormalsTexture, commandbuffer);
+        // Graphics.Blit(source, normal, mat);
+       // normal.SetGlobalShaderProperty("_GlowMap");
+
+       // ssaoShader.SetTexture(deptSsaoKernel, "_gPosition", position);
         ssaoShader.SetTexture(deptSsaoKernel, "_noiseTexture", noiseRender);
         ssaoShader.SetTexture(deptSsaoKernel, "_Results", renderTarget);
-
+        
+        ssaoShader.SetTextureFromGlobal(deptSsaoKernel, "_gNormal", "_gDepthNormals");
+        ssaoShader.SetTextureFromGlobal(deptSsaoKernel, "_gPosition", "_gPrelight");
         ssaoShader.GetKernelThreadGroupSizes(deptSsaoKernel, out uint groupX, out uint groupY, out uint groupZ);
         ssaoShader.Dispatch(deptSsaoKernel, Screen.width / (int)groupX, Screen.height / (int)groupY, (int)groupZ);
 
         Graphics.Blit(renderTarget, ssao);
 
+
+
+
+
         //TODO(): Pass SSAO further
         Graphics.Blit(renderTarget, destination);
         ReleaseRenderTargets();
+    }
+
+    private CommandBuffer CreateCommandBuffer(string name, string globalTextureName, BuiltinRenderTextureType source)
+    {
+        var cmdBuffer = new CommandBuffer();
+        cmdBuffer.name = name;
+        int TempID = Shader.PropertyToID("_Temp1");
+        cmdBuffer.GetTemporaryRT(TempID, -1, -1, 24, FilterMode.Bilinear);
+        cmdBuffer.SetRenderTarget(TempID);
+        cmdBuffer.ClearRenderTarget(true, true, Color.black);
+        cmdBuffer.SetGlobalTexture(globalTextureName, TempID);
+        cmdBuffer.Blit(source, TempID);
+        return cmdBuffer;
     }
 
     private void ShowArray<T>(T[] array)
