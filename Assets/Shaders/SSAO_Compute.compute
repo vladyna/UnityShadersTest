@@ -5,7 +5,7 @@
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
-RWTexture2D<float> _Results;
+RWTexture2D<float4> _Results;
 
 Texture2D<float4> _gPosition;
 SamplerState sampler_gPosition;
@@ -30,14 +30,19 @@ float4 noiseScale;
 float4x4 projection;
 float4x4 viewMatrix; 
 float4x4 model; 
-float gAspectRatio;
+float screenWidth;
+float screenHeight;
 
-[numthreads(8,1,1)]
+float _Step;
+
+float2 GetUV(uint3 id) {
+    return (id.xy + 0.5) * _Step - 1.0;
+}
+[numthreads(8,8,1)]
 void SSAO (uint3 id : SV_DispatchThreadID)
 {
     float4 NormalDepth = float4(0, 0, 0, 0);
-
-    float2 TexCoord = _gPosition[id.xy];
+    float2 TexCoord = float2((float)id.x / (float)screenWidth, (float)id.y / (float)screenHeight);
     DecodeDepthNormal(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0), NormalDepth.w, NormalDepth.xyz);
     float3 fragPos = _gPosition.SampleLevel(sampler_gPosition, TexCoord, 0).xyz;
     float3 normal = normalize(NormalDepth.xyz);//normalize(_gNormal.SampleLevel(sampler_gNormal, TexCoord, 0).xyz);
@@ -61,7 +66,7 @@ void SSAO (uint3 id : SV_DispatchThreadID)
         offset.xyz /= offset.w;
         offset.xyz = offset.xyz * 0.5 + 0.5;
 
-        float sampleDepth = NormalDepth.w;//_gPosition.SampleLevel(sampler_gPosition, offset.xy, 0).z;
+        float sampleDepth = _gPosition.SampleLevel(sampler_gPosition, offset.xy, 0).z;
 
         float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
 
@@ -69,8 +74,8 @@ void SSAO (uint3 id : SV_DispatchThreadID)
 
     }
     occlusion = 1.0 - (occlusion / kernelSize) * intensity;
-    //_Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
-    _Results[id.xy] = occlusion;//_gDiffuse.SampleLevel(sampler_gDiffuse, TexCoord, 0).xyz * occlusion;// float4(occlusion, occlusion, occlusion, occlusion);
+    _Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
+    //_Results[id.xy] = float4(TexCoord.x, TexCoord.y, 0.f, 1.0f);//_gDiffuse.SampleLevel(sampler_gDiffuse, TexCoord, 0).xyz * occlusion;// 
     //_Results[id.xy] = tex2D(_GlowMap, id.xy);
 
 }

@@ -16,6 +16,8 @@ public class SSAO_Compute : MonoBehaviour
     #region Private variables
 
     private RenderTexture renderTarget;
+    private RenderTexture normal;
+    private RenderTexture depth;
     private int kernelSize = 64;
     private float[] kernelSamples;
     private float[] noiseBuffer;
@@ -24,7 +26,7 @@ public class SSAO_Compute : MonoBehaviour
     private CommandBuffer depthcommandBuffer;
     #endregion
 
-
+    private int createdCommandBuffers = 0;
 
     private void Awake()
     {
@@ -37,9 +39,12 @@ public class SSAO_Compute : MonoBehaviour
 
     void OnEnable()
     {
-        normalCommandBuffer = CreateCommandBuffer("NormalDepth", "_gDepthNormals", BuiltinRenderTextureType.DepthNormals);
+        var basicTexture = new RenderTexture(Screen.width, Screen.height, 0);
+        normal = CreateRenderTexture(basicTexture);
+        depth = CreateRenderTexture(basicTexture);
+        normalCommandBuffer = CreateCommandBuffer("NormalDepth", "_gDepthNormals", BuiltinRenderTextureType.DepthNormals, normal);
 
-        depthcommandBuffer = CreateCommandBuffer("depth", "_gDepth", BuiltinRenderTextureType.Depth);
+        depthcommandBuffer = CreateCommandBuffer("depth", "_gDepth", BuiltinRenderTextureType.Depth, depth);
 
         camera.AddCommandBuffer(CameraEvent.AfterDepthNormalsTexture, normalCommandBuffer);
         camera.AddCommandBuffer(CameraEvent.AfterDepthTexture, depthcommandBuffer);
@@ -74,16 +79,18 @@ public class SSAO_Compute : MonoBehaviour
         ReleaseRenderTargets();
     }
 
-    private CommandBuffer CreateCommandBuffer(string name, string globalTextureName, BuiltinRenderTextureType source)
+    private CommandBuffer CreateCommandBuffer(string name, string globalTextureName, BuiltinRenderTextureType source, RenderTexture texture)
     {
+        createdCommandBuffers++;
         var cmdBuffer = new CommandBuffer();
         cmdBuffer.name = name;
-        int TempID = Shader.PropertyToID("_Temp1");
+        int TempID = Shader.PropertyToID($"_Temp{createdCommandBuffers}");
+        Debug.Log(TempID);
         cmdBuffer.GetTemporaryRT(TempID, -1, -1, 24, FilterMode.Bilinear);
-        cmdBuffer.SetRenderTarget(TempID);
+        cmdBuffer.SetRenderTarget(texture);
         cmdBuffer.ClearRenderTarget(true, true, Color.black);
-        cmdBuffer.SetGlobalTexture(globalTextureName, TempID);
-        cmdBuffer.Blit(source, TempID);
+        cmdBuffer.SetGlobalTexture(globalTextureName, texture);
+        cmdBuffer.Blit(source, texture);
         return cmdBuffer;
     }
 
@@ -113,6 +120,11 @@ public class SSAO_Compute : MonoBehaviour
         return noiseRender;
     }
 
+    private void Update()
+    {
+        ssaoShader.SetFloat("_Step", 2.0f / camera.aspect);
+
+    }
     private void SetShadersParameters()
     {
         ssaoShader.SetFloat("radius", Radius);
@@ -120,6 +132,8 @@ public class SSAO_Compute : MonoBehaviour
         ssaoShader.SetFloat("intensity", Intensity);
         ssaoShader.SetFloats("samples", kernelSamples);
         ssaoShader.SetInt("kernelSize", kernelSize);
+        ssaoShader.SetFloat("screenWidth", Screen.width);
+        ssaoShader.SetFloat("screenHeight", Screen.height);
 
         ssaoShader.SetFloats("noiseBuffer", noiseBuffer);
         ssaoShader.SetVector("noiseScale", new Vector4(Screen.width / 4, Screen.height / 4, 0, 0));
