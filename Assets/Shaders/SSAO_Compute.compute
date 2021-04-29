@@ -1,6 +1,7 @@
 #include "UnityCG.cginc"
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel SSAO
+#pragma kernel SSAO2
 
 
 // Create a RenderTexture with enableRandomWrite flag and set it
@@ -33,11 +34,6 @@ float4x4 model;
 float screenWidth;
 float screenHeight;
 
-float _Step;
-
-float2 GetUV(uint3 id) {
-    return (id.xy + 0.5) * _Step - 1.0;
-}
 [numthreads(8,8,1)]
 void SSAO (uint3 id : SV_DispatchThreadID)
 {
@@ -66,7 +62,7 @@ void SSAO (uint3 id : SV_DispatchThreadID)
         offset.xyz /= offset.w;
         offset.xyz = offset.xyz * 0.5 + 0.5;
 
-        float sampleDepth = _gPosition.SampleLevel(sampler_gPosition, offset.xy, 0).z;
+        float sampleDepth = _gPosition.SampleLevel(sampler_gPosition, offset.xy, 1).z;
 
         float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
 
@@ -75,8 +71,62 @@ void SSAO (uint3 id : SV_DispatchThreadID)
     }
     occlusion = 1.0 - (occlusion / kernelSize) * intensity;
     _Results[id.xy] = float4(occlusion, occlusion, occlusion, occlusion);
-    //_Results[id.xy] = float4(TexCoord.x, TexCoord.y, 0.f, 1.0f);//_gDiffuse.SampleLevel(sampler_gDiffuse, TexCoord, 0).xyz * occlusion;// 
+  //  _Results[id.xy] = float4(fragPos.x, fragPos.y, fragPos.z, 1.0f);//_gDiffuse.SampleLevel(sampler_gDiffuse, TexCoord, 0).xyz * occlusion;// 
     //_Results[id.xy] = tex2D(_GlowMap, id.xy);
 
+}
+
+float3 normalFromDepth(float depth, float2 texCoords) {
+    const float2 offset1 = float2(0.0, 0.001);
+    const float2 offset2 = float2(0.001, 0.0);
+
+    float depth1 = LinearEyeDepth(_gPosition.SampleLevel(sampler_gPosition, texCoords + offset1, 0)).r;
+    float depth2 = LinearEyeDepth(_gPosition.SampleLevel(sampler_gPosition, texCoords + offset2, 0)).r;
+
+    float3 p1 = float3(offset1, depth1 - depth);
+    float3 p2 = float3(offset2, depth2 - depth);
+
+    float3 normal = cross(p1, p2);
+    normal.z = -normal.z;
+
+    return normalize(normal);
+}
+float brightnessCorrection;
+float area;
+
+
+
+float3 sample_sphere[16];
+
+[numthreads(8, 8, 1)]
+void SSAO2(uint3 id : SV_DispatchThreadID)
+{
+    int sphereLength = 16;
+
+    float2 TexCoord = float2((float)id.x / (float)screenWidth, (float)id.y / (float)screenHeight);
+
+    float depth = LinearEyeDepth(_gPosition.SampleLevel(sampler_gPosition, TexCoord, 0)).r;
+    float3 randomVec = normalize(_noiseTexture.SampleLevel(sampler_noiseTexture, TexCoord * 4, 0).xyz);
+    float3 position = float3(TexCoord, depth);
+    float3 normal = normalFromDepth(depth, TexCoord);
+    float radius_depth = radius / depth;
+
+    float occlusion = 0.0;
+    for (int i = 0; i < sphereLength; i ++)
+    {
+       // float3 samplePos = float3(samples[i], samples[i + 1], samples[i + 2]);
+        float3 ray = radius_depth * reflect(sample_sphere[i], randomVec);
+        float3 hemi_ray = position + sign(dot(ray, normal)) * ray;
+
+        float occ_depth = LinearEyeDepth(_gPosition.SampleLevel(sampler_gPosition, saturate(hemi_ray.xy), 0)).r;
+        float difference = depth - occ_depth;
+
+        occlusion += step(bias, difference) * (1.0 - smoothstep(bias, area, difference));
+    }
+
+    float ao = 1.0 - intensity * occlusion * (1.0 / sphereLength);
+    float4 color = float4(ao, ao, ao, ao);
+    color.rgb = saturate(ao + brightnessCorrection);
+    _Results[id.xy] = color;
 }
 

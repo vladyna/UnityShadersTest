@@ -49,8 +49,8 @@ Shader "Hidden/SceenDepthNormal"
                 float4 NormalDepth;
 
                 DecodeDepthNormal(tex2D(_CameraDepthNormalsTexture, i.uv), NormalDepth.w, NormalDepth.xyz);
-                float3 WorldNormal = mul(UNITY_MATRIX_IV, float4(NormalDepth.xyz, 0)).xyz;
-                col.w = NormalDepth.w;
+                float3 WorldNormal = NormalDepth.xyz; //mul(UNITY_MATRIX_IV, float4(NormalDepth.xyz, 0)).xyz;
+                //col.w = NormalDepth.w;
                 col.rgb = WorldNormal.xyz;
                 return col;
             }
